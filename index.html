@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>O'nlikdan ikkilikka o'tkazish</title>
+
+<!--
+  =========================================================================
+  1-QADAM: SUPABASE UCHUN TAYYOR SQL
+  =========================================================================
+  Quyidagi SQL kodni to'liq nusxalab, Supabase loyihangizdagi
+  "SQL Editor" bo'limiga joylashtiring va "RUN" tugmasini bosing.
+  Bu jadval yaratadi, xavfsizlikni (RLS) yoqadi va
+  "anon" (hammaga ochiq) rol uchun yozish/o'qish ruxsatlarini beradi.
+
+  -- 1) Jadval yaratish: har bir o'quvchining amaliyot natijasini saqlaydi
+  create table if not exists public.conversions (
+    id uuid primary key default gen_random_uuid(),
+    created_at timestamptz not null default now(),
+    student_name text not null,
+    decimal_input text not null,
+    binary_result text not null
+  );
+
+  -- 2) Row Level Security (RLS) ni yoqish - bu xavfsizlik qatlami
+  alter table public.conversions enable row level security;
+
+  -- 3) "anon" (public) rol uchun yangi qator qo'shish (INSERT) siyosati
+  create policy "anon_insert_conversions"
+  on public.conversions
+  for insert
+  to anon
+  with check (true);
+
+  -- 4) "anon" (public) rol uchun o'qish (SELECT) siyosati
+  create policy "anon_select_conversions"
+  on public.conversions
+  for select
+  to anon
+  using (true);
+  =========================================================================
+-->
+
+<style>
+  /* ===== Umumiy dizayn: oddiy va katta harfli, bolalar uchun qulay ===== */
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #e9f1fb;
+  }
+
+  /* Dastur ekranning CHAP YUQORI burchagida joylashadi */
+  .container {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    width: 390px;
+    max-width: 92vw;
+    max-height: 95vh;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 4px solid #2563eb;
+    border-radius: 16px;
+    padding: 18px;
+  }
+
+  h1 {
+    font-size: 22px;
+    color: #1e3a8a;
+    text-align: center;
+    margin: 0 0 14px 0;
+  }
+
+  h2 {
+    font-size: 18px;
+    color: #1e3a8a;
+    margin: 18px 0 8px 0;
+    border-top: 2px dashed #93c5fd;
+    padding-top: 10px;
+  }
+
+  label {
+    display: block;
+    font-size: 16px;
+    font-weight: bold;
+    margin-top: 10px;
+    color: #111827;
+  }
+
+  input[type="text"] {
+    width: 100%;
+    font-size: 18px;
+    padding: 9px;
+    margin-top: 4px;
+    border: 2px solid #9ca3af;
+    border-radius: 8px;
+  }
+
+  button {
+    width: 100%;
+    margin-top: 16px;
+    font-size: 20px;
+    font-weight: bold;
+    padding: 12px;
+    background: #2563eb;
+    color: #ffffff;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    background: #93a5c4;
+    cursor: not-allowed;
+  }
+
+  .result-box {
+    margin-top: 14px;
+    padding: 12px;
+    background: #ecfdf5;
+    border: 2px solid #10b981;
+    border-radius: 10px;
+    font-size: 20px;
+    font-weight: bold;
+    text-align: center;
+    color: #065f46;
+    display: none;
+  }
+
+  .steps-box {
+    margin-top: 10px;
+    font-size: 15px;
+    line-height: 1.5;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 10px;
+    max-height: 160px;
+    overflow-y: auto;
+    display: none;
+  }
+
+  .error {
+    color: #b91c1c;
+    font-size: 15px;
+    font-weight: bold;
+    margin-top: 10px;
+    display: none;
+  }
+
+  .history-item {
+    font-size: 14px;
+    padding: 6px 0;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .guide {
+    font-size: 13px;
+    color: #374151;
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    border-radius: 8px;
+    padding: 10px;
+    margin-top: 16px;
+  }
+
+  .guide b { color: #9a3412; }
+</style>
+
+<!-- Supabase kutubxonasini CDN orqali ulaymiz (hech narsa o'rnatish shart emas) -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<div class="container">
+  <h1>O'NLIKDAN IKKILIKKA O'TKAZISH</h1>
+
+  <!-- O'quvchi ismini kiritadi, buni keyin Supabase'ga saqlaymiz -->
+  <label for="studentName">Ismingiz:</label>
+  <input type="text" id="studentName" placeholder="Masalan: Alisher">
+
+  <!-- O'nlik son kiritiladi, butun yoki kasr bo'lishi mumkin -->
+  <label for="decimalInput">O'nlik son (masalan: 13 yoki 13.75):</label>
+  <input type="text" id="decimalInput" placeholder="Sonni shu yerga yozing">
+
+  <button id="convertBtn">O'TKAZISH</button>
+
+  <!-- Xatolik bo'lsa shu yerda ko'rinadi -->
+  <div id="errorBox" class="error"></div>
+
+  <!-- Javob (natija) shu yerda katta harflar bilan chiqadi -->
+  <div id="resultBox" class="result-box"></div>
+
+  <!-- Yechim qadamlari shu yerda ko'rsatiladi -->
+  <div id="stepsBox" class="steps-box"></div>
+
+  <h2>MASHQ TARIXI (Supabase'dan)</h2>
+  <div id="historyList">Yuklanmoqda...</div>
+
+  <div class="guide">
+    <b>YO'RIQNOMA</b> sahifa pastida, kodning oxirida izoh sifatida yozilgan.
+  </div>
+</div>
+
+<script>
+  /* =====================================================================
+     2-QADAM: SUPABASE ULANISHI
+     =====================================================================
+     Pastdagi ikkita qiymatni O'ZINGIZNING Supabase loyihangizdan oling:
+     Supabase sayti -> Project Settings -> API -> "Project URL" va
+     "anon public" kalit. Hech qachon "service_role" kalitni bu yerga
+     yozmang - u maxfiy kalit, faqat anon (ochiq) kalit ishlatiladi.
+  */
+  const SUPABASE_URL = "https://SIZNING-PROJECTINGIZ.supabase.co"; // <-- bu yerga o'z qiymatlaringizni qo'ying
+  const SUPABASE_ANON_KEY = "SIZNING-ANON-KALITINGIZ"; // <-- bu yerga o'z qiymatlaringizni qo'ying
+
+  // Supabase bilan ishlash uchun "mijoz" (client) obyektini yaratamiz
+  const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  /* =====================================================================
+     3-QADAM: YORDAMCHI FUNKSIYA - "qotib qolmaslik" uchun vaqt chegarasi
+     =====================================================================
+     Agar internet sekin bo'lsa, so'rov juda uzoq kutib turmasin deb,
+     10 soniyadan keyin xatolik chiqaramiz.
+  */
+  function withTimeout(promise, ms, timeoutMessage) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(timeoutMessage));
+      }, ms);
+
+      promise
+        .then((value) => {
+          clearTimeout(timer);
+          resolve(value);
+        })
+        .catch((err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+    });
+  }
+
+  /* =====================================================================
+     4-QADAM: SON TEKSHIRISH (VALIDATSIYA)
+     =====================================================================
+     Faqat musbat sonlarni qabul qilamiz, masalan: 13 yoki 13.75
+     Harflar, minus belgi yoki bir nechta nuqta bo'lsa - xatolik beramiz.
+  */
+  function tekshirVaAjrat(matn) {
+    const toza = matn.trim();
+    const qoida = /^\d+(\.\d+)?$/; // faqat raqamlar va ixtiyoriy bitta kasr nuqtasi
+
+    if (toza === "") {
+      throw new Error("Iltimos, sonni kiriting.");
+    }
+    if (!qoida.test(toza)) {
+      throw new Error("Noto'g'ri son. Masalan: 13 yoki 13.75 kabi yozing.");
+    }
+
+    const qismlar = toza.split(".");
+    const butunQism = parseInt(qismlar[0], 10);
+    const kasrMatn = qismlar[1] || "";
+    const kasrQism = kasrMatn ? parseFloat("0." + kasrMatn) : 0;
+
+    return { butunQism, kasrQism, asliMatn: toza };
+  }
+
+  /* =====================================================================
+     5-QADAM: BUTUN QISMNI IKKILIKKA O'TKAZISH
+     =====================================================================
+     Usul: sonni 2 ga bo'lib, qoldiqlarni yozib boramiz.
+     Oxirida qoldiqlarni TESKARI tartibda o'qiymiz.
+  */
+  function butunniOtkaz(son, qadamlar) {
+    if (son === 0) {
+      qadamlar.push("Butun qism 0 bo'lgani uchun ikkilik ko'rinishi ham 0.");
+      return "0";
+    }
+
+    let n = son;
+    const qoldiqlar = [];
+
+    while (n > 0) {
+      const boluvchi = Math.floor(n / 2);
+      const qoldiq = n % 2;
+      qadamlar.push(n + " : 2 = " + boluvchi + ",  qoldiq = " + qoldiq);
+      qoldiqlar.push(qoldiq);
+      n = boluvchi;
+    }
+
+    return qoldiqlar.reverse().join("");
+  }
+
+  /* =====================================================================
+     6-QADAM: KASR QISMNI IKKILIKKA O'TKAZISH
+     =====================================================================
+     Usul: kasrni 2 ga ko'paytiramiz. Natijaning butun qismi - bitta bit.
+     Qolgan kasr bilan shu amalni takrorlaymiz.
+     Ba'zi kasrlar (masalan 0.1) cheksiz davom etadi, shuning uchun
+     16 ta bitdan keyin to'xtatamiz.
+  */
+  function kasrniOtkaz(kasr, qadamlar) {
+    if (kasr === 0) {
+      return "";
+    }
+
+    let f = kasr;
+    let natija = "";
+    const maksimalQadam = 16;
+    let hisob = 0;
+
+    while (f > 0 && hisob < maksimalQadam) {
+      const kobaytma = f * 2;
+      const bit = Math.floor(kobaytma);
+      const qolganKasr = kobaytma - bit;
+
+      qadamlar.push(
+        f.toFixed(6) + " x 2 = " + kobaytma.toFixed(6) +
+        "  ->  bit: " + bit + ",  qolgan kasr: " + qolganKasr.toFixed(6)
+      );
+
+      natija += bit;
+      f = qolganKasr;
+      hisob++;
+    }
+
+    if (f > 0) {
+      qadamlar.push("Diqqat: bu kasr ikkilik sanoq sistemasida cheksiz davom etadi, shuning uchun " + maksimalQadam + " ta bit bilan cheklandi (taxminiy natija).");
+    }
+
+    return natija;
+  }
+
+  /* =====================================================================
+     7-QADAM: ASOSIY O'TKAZISH FUNKSIYASI
+     =====================================================================
+     Yuqoridagi kichik funksiyalarni birlashtirib, to'liq javob va
+     qadamlar ro'yxatini qaytaradi.
+  */
+  function sonniIkkilikkaOtkaz(matn) {
+    const { butunQism, kasrQism } = tekshirVaAjrat(matn);
+    const qadamlar = [];
+
+    const butunIkkilik = butunniOtkaz(butunQism, qadamlar);
+    const kasrIkkilik = kasrQism > 0 ? kasrniOtkaz(kasrQism, qadamlar) : "";
+
+    const toliqNatija = kasrIkkilik ? (butunIkkilik + "." + kasrIkkilik) : butunIkkilik;
+
+    return { natija: toliqNatija, qadamlar };
+  }
+
+  /* =====================================================================
+     8-QADAM: EKRAN ELEMENTLARINI OLISH
+     =====================================================================
+  */
+  const studentNameInput = document.getElementById("studentName");
+  const decimalInputEl = document.getElementById("decimalInput");
+  const convertBtn = document.getElementById("convertBtn");
+  const errorBox = document.getElementById("errorBox");
+  const resultBox = document.getElementById("resultBox");
+  const stepsBox = document.getElementById("stepsBox");
+  const historyList = document.getElementById("historyList");
+
+  function xatoniKorsat(xabar) {
+    errorBox.textContent = xabar;
+    errorBox.style.display = "block";
+  }
+
+  function xatoniYashir() {
+    errorBox.textContent = "";
+    errorBox.style.display = "none";
+  }
+
+  /* =====================================================================
+     9-QADAM: TARIXNI SUPABASE'DAN O'QISH VA EKRANGA CHIQARISH
+     =====================================================================
+  */
+  async function tarixniYukla() {
+    try {
+      const so_rov = supabaseClient
+        .from("conversions")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      const { data, error } = await withTimeout(
+        so_rov,
+        10000,
+        "Internet juda sekin, tarixni yuklab bo'lmadi."
+      );
+
+      if (error) {
+        throw error;
+      }
+
+      if (!data || data.length === 0) {
+        historyList.innerHTML = "Hozircha yozuv yo'q";
+        return;
+      }
+
+      historyList.innerHTML = "";
+      data.forEach((qator) => {
+        const div = document.createElement("div");
+        div.className = "history-item";
+        div.textContent =
+          qator.student_name + ":  " + qator.decimal_input + "  ->  " + qator.binary_result;
+        historyList.appendChild(div);
+      });
+    } catch (err) {
+      historyList.innerHTML = "";
+      xatoniKorsat("Tarixni yuklashda xatolik: " + err.message);
+    }
+  }
+
+  /* =====================================================================
+     10-QADAM: YANGI NATIJANI SUPABASE'GA SAQLASH
+     =====================================================================
+  */
+  async function natijaniSaqla(ism, kiritilganSon, ikkilikNatija) {
+    const so_rov = supabaseClient.from("conversions").insert([
+      {
+        student_name: ism,
+        decimal_input: kiritilganSon,
+        binary_result: ikkilikNatija
+      }
+    ]);
+
+    const { error } = await withTimeout(
+      so_rov,
+      10000,
+      "Internet juda sekin, saqlab bo'lmadi."
+    );
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  /* =====================================================================
+     11-QADAM: "O'TKAZISH" TUGMASI BOSILGANDA ISHLAYDIGAN ASOSIY KOD
+     =====================================================================
+  */
+  convertBtn.addEventListener("click", async () => {
+    xatoniYashir();
+    resultBox.style.display = "none";
+    stepsBox.style.display = "none";
+
+    const ism = studentNameInput.value.trim();
+    const kiritilganSon = decimalInputEl.value.trim();
+
+    // Bo'sh maydonlarni yuborishdan oldin tekshiramiz
+    if (ism === "") {
+      xatoniKorsat("Iltimos, ismingizni kiriting.");
+      return;
+    }
+    if (kiritilganSon === "") {
+      xatoniKorsat("Iltimos, o'nlik sonni kiriting.");
+      return;
+    }
+
+    let hisoblashNatijasi;
+    try {
+      hisoblashNatijasi = sonniIkkilikkaOtkaz(kiritilganSon);
+    } catch (err) {
+      xatoniKorsat(err.message);
+      return;
+    }
+
+    // Natijani va qadamlarni ekranga chiqaramiz
+    resultBox.textContent = kiritilganSon + " (o'nlik) = " + hisoblashNatijasi.natija + " (ikkilik)";
+    resultBox.style.display = "block";
+
+    stepsBox.innerHTML = hisoblashNatijasi.qadamlar
+      .map((qadam) => "<div>" + qadam + "</div>")
+      .join("");
+    stepsBox.style.display = "block";
+
+    // Tugmani vaqtincha o'chiramiz va matnini o'zgartiramiz
+    convertBtn.disabled = true;
+    const eskiMatn = convertBtn.textContent;
+    convertBtn.textContent = "Yuborilmoqda...";
+
+    try {
+      await natijaniSaqla(ism, kiritilganSon, hisoblashNatijasi.natija);
+      await tarixniYukla();
+    } catch (err) {
+      xatoniKorsat("Saqlashda xatolik: " + err.message);
+    } finally {
+      // Internet tez yoki sekin bo'lishidan qat'iy nazar tugma albatta yoqiladi
+      convertBtn.disabled = false;
+      convertBtn.textContent = eskiMatn;
+    }
+  });
+
+  /* =====================================================================
+     12-QADAM: SAHIFA OCHILGANDA MAVJUD TARIXNI DARHOL YUKLASH
+     =====================================================================
+  */
+  window.addEventListener("DOMContentLoaded", () => {
+    tarixniYukla();
+  });
+</script>
+
+<!--
+  =========================================================================
+  QISQA YO'RIQNOMA (O'QITUVCHI UCHUN)
+  =========================================================================
+
+  1) SUPABASE LOYIHA OCHISH:
+     - supabase.com saytiga kiring, bepul ro'yxatdan o'ting.
+     - "New Project" tugmasini bosib, loyiha nomi va parol kiriting.
+     - Loyiha tayyor bo'lguncha 1-2 daqiqa kuting.
+
+  2) JADVAL YARATISH:
+     - Chap menyudan "SQL Editor" bo'limini oching.
+     - Ushbu faylning yuqori qismidagi SQL kodni to'liq nusxalab,
+       shu yerga joylashtiring va "RUN" tugmasini bosing.
+     - Bu "conversions" nomli jadval yaratadi va xavfsizlik
+       siyosatlarini (policy) o'rnatadi.
+
+  3) URL VA ANON KALITNI OLISH:
+     - Chap menyudan "Project Settings" -> "API" bo'limiga o'ting.
+     - "Project URL" qiymatini nusxalab, SUPABASE_URL o'zgaruvchisiga qo'ying.
+     - "Project API keys" ichidan "anon public" kalitni nusxalab,
+       SUPABASE_ANON_KEY o'zgaruvchisiga qo'ying.
+     - "service_role" kalitni HECH QACHON ishlatmang - u maxfiy.
+
+  4) FAYLNI ISHGA TUSHIRISH:
+     - index.html faylini istalgan brauzerda (Chrome, Edge, Firefox)
+       ikki marta bosib oching. Internetga ulanish kerak.
+
+  5) "ROW-LEVEL SECURITY POLICY" XATOSI CHIQSA:
+     - Bu xato odatda SQL kod to'liq ishga tushirilmaganda chiqadi.
+     - Supabase SQL Editor'ga qaytib, yuqoridagi 4 ta SQL buyrug'ini
+       (jadval, RLS yoqish, insert policy, select policy) birma-bir
+       yoki birgalikda qayta ishga tushiring.
+     - "Table Editor" -> "conversions" jadvali -> "RLS" bo'limidan
+       policy'lar haqiqatan ham yaratilganini tekshiring (anon_insert_conversions
+       va anon_select_conversions ko'rinishi kerak).
+     - SUPABASE_URL va SUPABASE_ANON_KEY to'g'ri nusxalanganini tekshiring
+       (bo'sh joy yoki qo'shimcha belgi bo'lmasligi kerak).
+  =========================================================================
+-->
+</body>
+</html>
